@@ -71,7 +71,9 @@ pub(crate) fn to_steam_result(result: sys::EResult) -> SteamResult {
     match result {
         // sys::EResult::k_EResultNone => Ok(()), TODO: I'm not sure if this is considered a success
         sys::EResult::k_EResultOK => Ok(()),
-        error => Err(error.try_into().unwrap()),
+        // Never panics: `process_callbacks` decodes every callback, handled
+        // or not, so a code `SteamError` does not name would kill the game.
+        error => Err(error.try_into().unwrap_or(SteamError::Generic)),
     }
 }
 
@@ -770,6 +772,28 @@ mod tests {
     use serial_test::serial;
 
     use super::*;
+
+    /// Steam sends `SteamServersDisconnected_t` with `k_EResultOK`
+    /// (#327) and `k_EResultNone`; decoding either must not panic.
+    #[test]
+    fn a_disconnect_decodes_whatever_its_result() {
+        for (result, ok) in [
+            (sys::EResult::k_EResultOK, true),
+            (sys::EResult::k_EResultNone, false),
+        ] {
+            let mut raw = sys::SteamServersDisconnected_t { m_eResult: result };
+            let decoded = unsafe {
+                CallbackResult::from_raw(
+                    SteamServersDisconnected::ID,
+                    (&mut raw as *mut sys::SteamServersDisconnected_t).cast(),
+                )
+            };
+            let Some(CallbackResult::SteamServersDisconnected(d)) = decoded else {
+                panic!("not decoded as a disconnect");
+            };
+            assert_eq!(d.reason.is_ok(), ok, "{result:?}");
+        }
+    }
 
     #[test]
     #[serial]
